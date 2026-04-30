@@ -11,7 +11,6 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const bcrypt = require('bcryptjs');
 
 // Initialize Firebase Admin SDK once
 if (serviceAccount && !admin.apps.length) {
@@ -20,9 +19,10 @@ if (serviceAccount && !admin.apps.length) {
   });
 }
 
+const bcrypt = require("bcryptjs");   
+const Employee = require("./models/Employee");
 
 const Visitor = require('./models/Visitor');
-const Employee = require('./models/Employee');
 const Admin = require('./models/Admin');
 const ScheduledMeeting = require('./models/ScheduledMeeting');
 const Settings = require('./models/Settings');
@@ -30,6 +30,8 @@ const cron = require('node-cron');
 const { haversine } = require('./utils/haversine');
 
 const app = express();
+
+
 const PORT = process.env.PORT || 5000;
 
 app.use(cors({
@@ -38,6 +40,40 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+// Employee Login API
+app.post("/api/employees/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
+
+    const employee = await Employee.findOne({ email });
+
+    if (!employee) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+
+    const isMatch = await bcrypt.compare(password, employee.password);
+
+    if (!isMatch) {
+      return res.status(400).json({ error: "Invalid credentials" });
+    }
+
+    const emp = employee.toObject();
+    delete emp.password;
+
+    res.json({ employee: emp });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
@@ -242,21 +278,6 @@ app.post('/api/admin/login', async (req, res) => {
   }
 });
 
-// Employee Login
-app.post('/api/employee/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const employee = await Employee.findOne({ email });
-    if (!employee) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const isMatch = await bcrypt.compare(password, employee.password);
-    if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
-
-    res.json({ message: 'Login successful', employee: { _id: employee._id, name: employee.name, email: employee.email, department: employee.department, designation: employee.designation, photo: employee.photo } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // --- EMPLOYEE MANAGEMENT ROUTES ---
 

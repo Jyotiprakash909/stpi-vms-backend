@@ -170,7 +170,7 @@ const sendVisitorNotification = async (visitor, isScheduled = false) => {
         priority: 'high',
         notification: {
           sound: isScheduled ? 'default' : 'notification',
-          channelId: 'visitor-alerts',
+          channelId: 'visitor-alerts-v2',
           priority: 'max',
           visibility: 'public',
           defaultVibrateTimings: !isScheduled,

@@ -169,7 +169,7 @@ const sendVisitorNotification = async (visitor, isScheduled = false) => {
       android: {
         priority: 'high',
         notification: {
-          sound: isScheduled ? 'default' : 'notification_alarm',
+          sound: isScheduled ? 'default' : 'notification',
           channelId: 'visitor-alerts',
           priority: 'max',
           visibility: 'public',

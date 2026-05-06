@@ -19,7 +19,7 @@ if (serviceAccount && !admin.apps.length) {
   });
 }
 
-const bcrypt = require("bcryptjs");   
+const bcrypt = require("bcrypt");   
 const Employee = require("./models/Employee");
 
 const Visitor = require('./models/Visitor');
@@ -50,7 +50,8 @@ app.post("/api/employees/login", async (req, res) => {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const employee = await Employee.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
+    const employee = await Employee.findOne({ email: normalizedEmail });
 
     if (!employee) {
       return res.status(404).json({ error: "Employee not found" });
@@ -170,7 +171,7 @@ const sendVisitorNotification = async (visitor, isScheduled = false) => {
         priority: 'high',
         notification: {
           sound: isScheduled ? 'default' : 'notification',
-          channelId: 'visitor-alerts-v2',
+          channelId: 'visitor-alerts-v9',
           priority: 'max',
           visibility: 'public',
           defaultVibrateTimings: !isScheduled,
@@ -263,12 +264,15 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const admin = await Admin.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
+    const admin = await Admin.findOne({ email: normalizedEmail });
+
     if (!admin || !admin.password) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const isMatch = await bcrypt.compare(password, admin.password);
+
     if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
 
     res.json({ message: 'Login successful', admin: { email: admin.email } });
@@ -305,6 +309,35 @@ app.post('/api/employees', upload.single('photo'), async (req, res) => {
     delete employeeResponse.password;
 
     res.status(201).json(employeeResponse);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/employees/:id', upload.single('photo'), async (req, res) => {
+  try {
+    const { name, email, department, designation, password } = req.body;
+    const updateData = { name, email, department, designation };
+    
+    if (req.file) {
+      updateData.photo = `/uploads/${req.file.filename}`;
+    }
+    
+    if (password && password.trim() !== "") {
+      updateData.password = await bcrypt.hash(password, 10);
+    }
+
+    const employee = await Employee.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    ).select('-password');
+
+    if (!employee) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    res.json(employee);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -386,16 +419,38 @@ app.get('/api/schedule-meeting/check/:phone', async (req, res) => {
       return res.status(404).json({ message: 'No scheduled meeting found' });
     }
     console.log("📌 Found meeting for:", meeting.visitorName);
-
-    // Check time range
     const now = new Date();
     const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    
+
     console.log("⏰ Current Time:", currentTimeStr);
     console.log("📅 Meeting Range:", meeting.startTime, "to", meeting.endTime);
 
-    if (currentTimeStr >= meeting.startTime && currentTimeStr <= meeting.endTime) {
-      console.log("✅ Time match! Auto-approving...");
+    // Convert time "HH:mm" to minutes from midnight for robust comparison
+    const toMinutes = (timeStr) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    const currentMins = toMinutes(currentTimeStr);
+    let startMins = toMinutes(meeting.startTime);
+    let endMins = toMinutes(meeting.endTime);
+
+    // Add 30 minutes grace period
+    startMins -= 30;
+    endMins += 30;
+
+    // Handle wrap-around (if meeting is around midnight)
+    let isTimeMatch = false;
+    if (startMins <= endMins) {
+      // Normal case: 10:00 to 12:00
+      isTimeMatch = (currentMins >= startMins && currentMins <= endMins);
+    } else {
+      // Wrap around case: 23:00 to 01:00
+      isTimeMatch = (currentMins >= startMins || currentMins <= endMins);
+    }
+
+    if (isTimeMatch) {
+      console.log("✅ Time match (with grace period)! Auto-approving...");
       
       // Create Visitor record
       const newVisitor = new Visitor({
@@ -478,8 +533,8 @@ app.post('/api/visitors', upload.single('photo'), async (req, res) => {
              parsedLocation.lat, parsedLocation.lng,
              settings.geoFence.latitude, settings.geoFence.longitude
            );
-           if (distance > settings.geoFence.radius) {
-             return res.status(403).json({ error: 'You are not within the office premises. Entry not allowed.' });
+           if (distance > settings.geoFence.radius + 50) {
+             return res.status(403).json({ error: `You are not within the office premises (${distance.toFixed(0)}m from center). Entry not allowed.` });
            }
         }
       } catch (e) {
@@ -576,17 +631,30 @@ app.put('/api/visitors/:id/location', async (req, res) => {
       const distance = haversine(lat, lng, settings.geoFence.latitude, settings.geoFence.longitude);
       visitor.distanceFromOffice = distance;
       
-      if (distance > settings.geoFence.radius) {
-        visitor.isInsideGeofence = false;
-        visitor.checkOutTime = new Date();
-        visitor.isAutoCheckout = true;
-        visitor.checkoutReason = 'geo_exit';
-        visitor.status = 'completed';
-        if (!visitor.meetingEndTime) visitor.meetingEndTime = new Date();
-        visitor.message = "Visitor exited premises without checkout. Auto-detected via geo-fencing.";
-        console.log(`Auto checked out visitor ${visitor.name} due to geo_exit`);
+      const radiusWithBuffer = settings.geoFence.radius + 50; // Add 50m buffer tolerance
+
+      console.log(`[GEO-DEBUG] Visitor: ${visitor.name}`);
+      console.log(`[GEO-DEBUG] Coords: Admin(${settings.geoFence.latitude}, ${settings.geoFence.longitude}) | Visitor(${lat}, ${lng})`);
+      console.log(`[GEO-DEBUG] Distance: ${distance.toFixed(2)}m | Allowed: ${radiusWithBuffer}m (Radius: ${settings.geoFence.radius}m + 50m Buffer)`);
+
+      if (distance > radiusWithBuffer) {
+        visitor.consecutiveOutsideCount = (visitor.consecutiveOutsideCount || 0) + 1;
+        console.log(`[GEO-DEBUG] Status: OUTSIDE | Consecutive Count: ${visitor.consecutiveOutsideCount}/3`);
+        
+        if (visitor.consecutiveOutsideCount >= 3) {
+          visitor.isInsideGeofence = false;
+          visitor.checkOutTime = new Date();
+          visitor.isAutoCheckout = true;
+          visitor.checkoutReason = 'geo_exit';
+          visitor.status = 'completed';
+          if (!visitor.meetingEndTime) visitor.meetingEndTime = new Date();
+          visitor.message = `Auto-checkout: Consistently outside premises (${distance.toFixed(1)}m > ${radiusWithBuffer}m).`;
+          console.log(`[GEO-ACTION] !!! AUTO CHECKOUT !!! Visitor ${visitor.name} exited premises.`);
+        }
       } else {
+        visitor.consecutiveOutsideCount = 0; // Reset counter if back inside
         visitor.isInsideGeofence = true;
+        console.log(`[GEO-DEBUG] Status: INSIDE | Counter Reset.`);
       }
     }
 

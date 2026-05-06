@@ -14,7 +14,7 @@ const seedDatabase = async () => {
     await Employee.deleteMany({});
     await Admin.deleteMany({});
     await Visitor.deleteMany({});
-    
+
     // Create Admin
     const adminHashedPassword = await bcrypt.hash('123456', 10);
     const newAdmin = new Admin({
@@ -36,7 +36,7 @@ const seedDatabase = async () => {
 
     await Employee.insertMany(employees);
     console.log("Employees seeded successfully! Password for all is 'password123'");
-    
+
     process.exit(0);
   } catch (err) {
     console.error("Error seeding data:", err);

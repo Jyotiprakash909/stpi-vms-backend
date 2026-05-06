@@ -47,7 +47,8 @@ const visitorSchema = new mongoose.Schema({
   checkoutReason: { type: String, enum: ['manual', 'geo_exit', 'location_off'], default: 'manual' },
   // Debugging & Status
   distanceFromOffice: { type: Number, default: null },
-  isInsideGeofence: { type: Boolean, default: true }
+  isInsideGeofence: { type: Boolean, default: true },
+  consecutiveOutsideCount: { type: Number, default: 0 }
 });
 
 module.exports = mongoose.model('Visitor', visitorSchema);
